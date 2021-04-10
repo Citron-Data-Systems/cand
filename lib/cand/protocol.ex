@@ -30,6 +30,8 @@ defmodule Cand.Protocol do
 
   ## Mode BCM (Broadcast Manager) ##
 
+  ### Commands for transmission ###
+
   @doc """
   Add a new frame (job) for transmission. This command adds a new frame to the BCM queue.
   An interval can be configured to have the frame sent cyclic.
@@ -100,11 +102,83 @@ defmodule Cand.Protocol do
     end
   end
 
-  # hacer multiclausulas (binario, string),
-  # hacer dlc automatico con dada
-  # validar data.
-  def send(socket, can_id, can_dlc, data) do
-    Socket.send(socket, '< send #{can_id} #{can_dlc} #{data} >')
+  ### Commands for reception ###
+
+  @doc """
+  This command is used to configure the broadcast manager for reception of frames with a given CAN ID. 
+  Frames are only received when they match the pattern that is provided. 
+  The time value given is used to throttle the incoming update rate.
+  """
+  @spec filter_frames(GenServer.server(), integer(), binary(), integer(), integer()) :: :ok | {:error, atom()}
+  def filter_frames(socket, can_id, pattern, secs \\ 0, u_secs \\ 10) do
+    with  true <- is_pid(socket),
+          true <- is_a_integer_greater_or_equal_than(can_id, 0),
+          true <- is_a_integer_greater_or_equal_than(secs, 0),
+          true <- is_a_integer_greater_or_equal_than(u_secs, 0),
+          true <- is_binary(pattern),
+          can_dlc <- byte_size(pattern),
+          str_pattern <- pattern_binary_to_string(pattern) do
+      Socket.send(socket, "< filter #{secs} #{u_secs} #{can_id} #{can_dlc} #{str_pattern}>")
+    else
+      _ ->
+        raise(ArgumentError, "There is an invalid Argument.")
+    end
+  end
+
+  @doc """
+  This command is used to configure the broadcast manager for reception of frames 
+  with a given CAN ID and a multiplex message filter mask. 
+  Frames are only sent when they match the pattern that is provided. 
+  The time value given is used to throttle the incoming update rate.
+  NOTE: Pattern size must be n_frame * 8.
+  """
+  @spec filter_multiplex_frames(GenServer.server(), integer(), integer(), binary(), integer(), integer()) :: :ok | {:error, atom()}
+  def filter_multiplex_frames(socket, can_id, n_frame, pattern, secs \\ 0, u_secs \\ 10) do
+    with  true <- is_pid(socket),
+          true <- is_a_integer_greater_or_equal_than(can_id, 0),
+          true <- is_a_integer_greater_or_equal_than(n_frame, 0),
+          true <- is_a_integer_greater_or_equal_than(secs, 0),
+          true <- is_a_integer_greater_or_equal_than(u_secs, 0),
+          true <- is_binary(pattern),
+          can_dlc <- byte_size(pattern),
+          true <- can_dlc == n_frame * 8,
+          str_pattern <- pattern_binary_to_string(pattern) do
+      Socket.send(socket, "< muxfilter #{secs} #{u_secs} #{can_id} #{n_frame} #{str_pattern}>")
+    else
+      _ ->
+        raise(ArgumentError, "There is an invalid Argument.")
+    end
+  end
+
+  @doc """
+  Adds a subscription to a CAN ID. The frames are sent regardless of their content. 
+  An interval in seconds or microseconds may be set.
+  """
+  @spec subscribe(GenServer.server(), integer(), integer(), integer()) :: :ok | {:error, atom()}
+  def subscribe(socket, can_id, secs \\ 0, u_secs \\ 10) do
+    with  true <- is_pid(socket),
+          true <- is_a_integer_greater_or_equal_than(can_id, 0),
+          true <- is_a_integer_greater_or_equal_than(secs, 0),
+          true <- is_a_integer_greater_or_equal_than(u_secs, 0) do
+      Socket.send(socket, "< subscribe #{secs} #{u_secs} #{can_id} >")
+    else
+      _ ->
+        raise(ArgumentError, "There is an invalid Argument.")
+    end
+  end
+
+  @doc """
+  Deletes all subscriptions or filters for a specific CAN ID.
+  """
+  @spec unsubscribe(GenServer.server(), integer()) :: :ok | {:error, atom()}
+  def unsubscribe(socket, can_id) do
+    with  true <- is_pid(socket),
+          true <- is_a_integer_greater_or_equal_than(can_id, 0) do
+      Socket.send(socket, "< unsubscribe #{can_id} >")
+    else
+      _ ->
+        raise(ArgumentError, "There is an invalid Argument.")
+    end
   end
 
   ## Mode ##
@@ -115,6 +189,10 @@ defmodule Cand.Protocol do
 
   def rawmode(socket) do
     Socket.send(socket, "< rawmode >")  
+  end
+
+  def controlmode(socket) do
+    Socket.send(socket, "< controlmode >")  
   end
 
   ## Misc ##
@@ -128,6 +206,7 @@ defmodule Cand.Protocol do
     Socket.send_receive(socket, "< echo >")
   end
 
+  defp pattern_binary_to_string(pattern_frame), do: frame_binary_to_string(pattern_frame)
   defp frame_binary_to_string(frame) do
     for <<byte::8 <- frame >>, reduce: "" do
       acc -> acc <> Integer.to_string(byte, 16) <> " "
