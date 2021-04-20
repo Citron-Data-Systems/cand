@@ -1,6 +1,41 @@
 defmodule Cand.Socket do
   @moduledoc """
     TCP socket handler for socketcand endpoint.
+
+    This module provides functions for configuration, read/write CAN frames.
+    `Cand.Socket` is implemented as a `__using__` macro so that you can put it in any module,
+    you can initialize your Socket manually (see `test/socket_tests`) or by overwriting `configuration/1`, 
+    `cyclic_frames/1` and `subscriptions/1` to autoset the configuration, cyclic_frames and subscription items. 
+    It also helps you to handle new CAN frames and subscription events by overwriting `handle_frame/2` callback.
+
+    The following example shows a module that takes its configuration from the environment (see `test/terraform_test.exs`):
+
+    ```elixir
+    defmodule MySocket do
+      use Cand.Socket
+      
+      # Use the `init` function to configure your Socket.
+      def init({parent_pid, 103} = _user_init_state, socket_pid) do
+        %{parent_pid: parent_pid, socket_pid: socket_pid}
+      end
+
+      def configuration(_user_init_state), do: Application.get_env(:my_socket, :configuration, [])
+      def cyclic_frames(_user_init_state), do: Application.get_env(:my_socket, :cyclic_frames, [])
+      def subscriptions(_user_init_state), do: Application.get_env(:my_socket, :subscriptions, [])
+
+      def handle_frame(new_frame, state) do
+        send(state.parent_pid, {:handle_frame, new_frame})
+        state
+      end
+    end
+    ```
+    Because it is small a GenServer, it accepts the same [options](https://hexdocs.pm/elixir/GenServer.html#module-how-to-supervise) for supervision
+    to configure the child spec and passes them along to `GenServer`:
+    ```elixir
+    defmodule MyModule do
+      use Cand.Socket, restart: :transient, shutdown: 10_000
+    end
+    ```
   """
   use GenServer
 
@@ -11,16 +46,15 @@ defmodule Cand.Socket do
       * port: Socketcand deamon port, default => 29536.
       * host: Network Interface IP, default => {127, 0, 0, 1}.
       * socket: Socket PID.
+      * controlling_process: Parent process.
+      * status: nil, :connected, :disconnected.
     """
-
-    # port: 
-    # controlling_process: parent process
-
     defstruct last_cmds: [],
               port: 29536,
               host: {127, 0, 0, 1},
               socket: nil,
-              socket_opts: []
+              socket_opts: [],
+              controlling_process: nil
   end
 
   defmacro __using__(opts) do
@@ -168,42 +202,55 @@ defmodule Cand.Socket do
     end
   end
 
-  def init(state), do: {:ok, state}
+  def init(state), do: {:ok, %{state | controlling_process: self()}}
 
   def start_link do
-    GenServer.start_link(__MODULE__, @initial_state)
+    GenServer.start_link(__MODULE__, %State{})
   end
 
-  def connect(pid, host, port, opts \\ []) do
+  def connect(pid, host, port, opts \\ [active: false]) do
     GenServer.call(pid, {:connect, host, port, opts})
   end
 
-  def send(pid, msg) do
-    GenServer.call(pid, {:send, msg})
+  def send(pid, cmd, timeout \\ :infinity) do
+    GenServer.call(pid, {:send, cmd, timeout})
+  end
+
+  def receive(pid, timeout \\ :infinity) do
+    GenServer.call(pid, {:receive, timeout})
   end
 
   def handle_call({:connect, host, port, opts}, _from_, state) do
-    {:ok, socket} = :gen_tcp.connect(host, port, opts)
-    {:reply, {:ok, host: host, port: port, opts: opts}, %{state | socket: socket, listener: nil}}
-  end
-
-  def handle_call({:send, msg}, _from_, %{socket: socket} = state) do
-    with :ok <- :gen_tcp.send(socket, msg) do
-      IO.inspect(msg, label: "CANBUS")
-      {:reply, :ok, state}
+    with {:ok, socket} <- :gen_tcp.connect(host, port, opts) do
+      {:reply, :ok, %{state | socket: socket, host: host, port: port, socket_opts: opts}}
     else
-      _ ->
-        {:reply, :error, state}
+      error_reason ->
+        {:reply, error_reason, state}
     end
   end
 
-  def handle_call({:send_receive, msg}, _from_, %{socket: socket} = state) do
-    :ok = :gen_tcp.send(socket, msg)
-    {:ok, response} = :gen_tcp.recv(socket, 0)
-    {:reply, response, state}
+  # wait for response 
+  def handle_call({:send, cmd, timeout}, _from_, %{socket: socket, socket_opts: [active: false]} = state) do
+    with  :ok <- :gen_tcp.send(socket, cmd),
+          {:ok, response} = :gen_tcp.recv(socket, 0, timeout) do
+      {:reply, {:ok, response}, state}
+    else
+      error_reason ->
+        {:reply, error_reason, %{state | socket: nil}}
+    end
   end
 
-  def handle_info({:tcp, _, message}, state) do
+  def handle_call({:send, cmd, _timeout}, _from_, %{socket: socket, last_cmds: cmds} = state) do
+    with  :ok <- :gen_tcp.send(socket, cmd),
+          new_cmds <- add_new_cmd(cmd, cmds) do
+      {:reply, :ok, %{state | last_cmds: new_cmds}}
+    else
+      error_reason ->
+        {:reply, error_reason, %{state | socket: nil}}
+    end
+  end
+
+  def handle_info({:tcp, _port, message}, state) do
     IO.inspect(message, label: "CANBUS")
 
     message
@@ -220,6 +267,10 @@ defmodule Cand.Socket do
     IO.inspect({:socket_closed, port})
     {:noreply, state}
   end
+
+  defp add_new_cmd("< send " <> _payload, last_cmds), do: last_cmds
+  defp add_new_cmd("< sendpdu " <> _payload, last_cmds), do: last_cmds
+  defp add_new_cmd(cmd, last_cmds), do: last_cmds ++ [cmd]
 
   defp parse_messages(messages) do
     messages
