@@ -39,6 +39,8 @@ defmodule Cand.Socket do
   """
   use GenServer
 
+  require Logger
+
   defmodule State do
     @moduledoc """
       * last_cmds: It is a record of the last configuration commands that will be 
@@ -54,7 +56,8 @@ defmodule Cand.Socket do
               host: {127, 0, 0, 1},
               socket: nil,
               socket_opts: [],
-              controlling_process: nil
+              controlling_process: nil,
+              reconnect: false
   end
 
   defmacro __using__(opts) do
@@ -128,7 +131,7 @@ defmodule Cand.Socket do
              {:ok, ip_host} <- ip_to_tuple(host),
              port <- Keyword.get(configuration, :port, 29536),
              true <- is_integer(port) do
-          Socket.connect(pid, ip_host, port, active: true)
+          Socket.connect(pid, ip_host, port, [active: true])
         else
           _ ->
             require Logger
@@ -212,6 +215,10 @@ defmodule Cand.Socket do
     GenServer.call(pid, {:connect, host, port, opts})
   end
 
+  def disconnect(pid) do
+    GenServer.call(pid, :disconnect)
+  end
+
   def send(pid, cmd, timeout \\ :infinity) do
     GenServer.call(pid, {:send, cmd, timeout})
   end
@@ -220,30 +227,67 @@ defmodule Cand.Socket do
     GenServer.call(pid, {:receive, timeout})
   end
 
-  def handle_call({:connect, host, port, opts}, _from_, state) do
-    with {:ok, socket} <- :gen_tcp.connect(host, port, opts) do
-      {:reply, :ok, %{state | socket: socket, host: host, port: port, socket_opts: opts}}
+  def handle_call({:connect, host, port, [active: false] = opts}, _from_, state) do
+    with  {:ok, socket} <- :gen_tcp.connect(host, port, opts),
+          {:ok, message} <- :gen_tcp.recv(socket, 0),
+          response <- parse_message(message) do
+      {:reply, response, %{state | socket: socket, host: host, port: port, socket_opts: opts, reconnect: true}}
     else
       error_reason ->
         {:reply, error_reason, state}
     end
   end
 
+  def handle_call({:connect, host, port, opts}, _from_, state) do
+    with {:ok, socket} <- :gen_tcp.connect(host, port, opts) do
+      {:reply, :ok, %{state | socket: socket, host: host, port: port, socket_opts: opts, reconnect: true}}
+    else
+      error_reason ->
+        {:reply, error_reason, state}
+    end
+  end
+
+  def handle_call(_call, _from, %{socket: nil} = state) do
+    Logger.warn("(#{__MODULE__}) There is no available socket. #{inspect(state)}")
+    {:reply, {:error, :einval}, %{state | socket: nil}}
+  end
+
   # wait for response 
-  def handle_call({:send, cmd, timeout}, _from_, %{socket: socket, socket_opts: [active: false]} = state) do
-    with  :ok <- :gen_tcp.send(socket, cmd),
-          {:ok, response} = :gen_tcp.recv(socket, 0, timeout) do
-      {:reply, {:ok, response}, state}
+  def handle_call({:send, cmd, timeout}, _from, %{socket_opts: [active: false]} = state) do
+    with  :ok <- :gen_tcp.send(state.socket, cmd),
+          new_cmds <- add_new_cmd(cmd, state.last_cmds),
+          {:ok, message} <- receive_reponse(cmd, state.socket, timeout),
+          response <- parse_messages(message) do
+      {:reply, response, %{state | last_cmds: new_cmds}}
     else
       error_reason ->
         {:reply, error_reason, %{state | socket: nil}}
     end
   end
 
-  def handle_call({:send, cmd, _timeout}, _from_, %{socket: socket, last_cmds: cmds} = state) do
-    with  :ok <- :gen_tcp.send(socket, cmd),
+  def handle_call({:send, cmd, _timeout}, _from, %{last_cmds: cmds} = state) do
+    with  :ok <- :gen_tcp.send(state.socket, cmd),
           new_cmds <- add_new_cmd(cmd, cmds) do
       {:reply, :ok, %{state | last_cmds: new_cmds}}
+    else
+      error_reason ->
+        {:reply, error_reason, %{state | socket: nil}}
+    end
+  end
+
+  def handle_call({:receive, timeout}, _from, %{socket_opts: [active: false]} = state) do
+    with  {:ok, message} <- :gen_tcp.recv(state.socket, 0, timeout),
+          response <- parse_messages(message) do
+      {:reply, response, state}
+    else
+      error_reason ->
+        {:reply, error_reason, %{state | socket: nil}}
+    end
+  end
+
+  def handle_call(:disconnect, _from, %{socket: socket} = state) do
+    with  :ok <- :gen_tcp.close(socket) do
+      {:reply, :ok, %{state | reconnect: false}}
     else
       error_reason ->
         {:reply, error_reason, %{state | socket: nil}}
@@ -263,17 +307,29 @@ defmodule Cand.Socket do
     {:noreply, state}
   end
 
-  def handle_info({:tcp_closed, port}, state) do
-    IO.inspect({:socket_closed, port})
+  def handle_info({:tcp_closed, _port}, %{reconnect: false} = state) do
+    Logger.info("(#{__MODULE__}) Expected disconnection. #{inspect(state)}")
+    {:noreply, state}
+  end
+
+  def handle_info({:tcp_closed, _port}, state) do
+    Logger.warn("(#{__MODULE__}) Unexpected disconnection. Reconnect...")
+    Kernel.send(state.controlling_process, :disconnect)
     {:noreply, state}
   end
 
   defp add_new_cmd("< send " <> _payload, last_cmds), do: last_cmds
   defp add_new_cmd("< sendpdu " <> _payload, last_cmds), do: last_cmds
-  defp add_new_cmd(cmd, last_cmds), do: last_cmds ++ [cmd]
+  defp add_new_cmd(cmd, last_cmds), do: Enum.uniq(last_cmds ++ [cmd])
+
+  defp receive_reponse("< send " <> _payload, _socket, _timeout), do: {:ok, '< ok >'}
+  defp receive_reponse("< sendpdu " <> _payload, _socket, _timeout), do: {:ok, '< ok >'}
+  defp receive_reponse(_cmd, socket, timeout), do: :gen_tcp.recv(socket, 0, timeout)
 
   defp parse_messages(messages) do
     messages
+    |> List.to_string()
+    |> IO.inspect()
     |> String.split("><")
     |> Enum.map(fn frame ->
       frame
@@ -284,9 +340,33 @@ defmodule Cand.Socket do
     end)
   end
 
+  defp parse_message(message) when is_list(message) do
+    message
+    |> List.to_string()
+    |> String.trim("<")
+    |> String.trim(">")
+    |> String.trim()
+    |> parse_message()
+  end
+  defp parse_message("frame " <> payload) do
+    with [can_id_str, timestamp, can_frame] <- String.split(payload, " "),
+         can_frame_bin <- str_to_bin_frame(can_frame),
+         can_id_int <- String.to_integer(can_id_str, 16) do
+      {:frame, {can_id_int, timestamp, can_frame_bin}}
+    else
+      error_reason ->
+        {:error, error_reason}
+    end
+  end
   defp parse_message("ok"), do: :ok
-  defp parse_message("hi"), do: :ok
-  defp parse_message("frame " <> frame), do: frame
+  defp parse_message("hi"), do: :hi
+  defp parse_message("echo"), do: :ok
   defp parse_message("error " <> message), do: {:error, message}
   defp parse_message(message), do: {:error, message}
+
+  defp str_to_bin_frame(can_frame) do
+    for <<byte::binary-2 <- can_frame>>, reduce: <<>> do
+      acc -> acc <> <<String.to_integer(byte, 16)>>
+    end
+  end
 end

@@ -41,7 +41,7 @@ defmodule Cand.Protocol do
   The open command is used to select one of the CAN busses.
   Note: The can_device may be at maximum 16 characters long.
   """
-  @spec open(GenServer.server(), binary()) :: :ok | {:error, atom()}
+  @spec open(GenServer.server(), binary()) :: :ok | list() | {:error, atom()}
   def open(socket, can_device) when is_pid(socket) and is_binary(can_device) do
     with str_size <- String.length(can_device),
          true <- str_size <= 16 do
@@ -61,10 +61,11 @@ defmodule Cand.Protocol do
   An interval can be configured to have the frame sent cyclic.
   """
   @spec add_cyclic_frame(GenServer.server(), integer(), binary(), integer(), integer()) ::
-          :ok | {:error, atom()}
+          :ok | list() | {:error, atom()}
   def add_cyclic_frame(socket, can_id, frame, secs \\ 0, u_secs \\ 10) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_a_integer_greater_or_equal_than?(secs, 0),
          true <- is_a_integer_greater_or_equal_than?(u_secs, 0),
          true <- is_binary(frame),
@@ -82,10 +83,11 @@ defmodule Cand.Protocol do
   command with new content.
   NOTE: The transmission timers are not touched.
   """
-  @spec update_cyclic_frame(GenServer.server(), integer(), binary()) :: :ok | {:error, atom()}
+  @spec update_cyclic_frame(GenServer.server(), integer(), binary()) :: :ok | list() | {:error, atom()}
   def update_cyclic_frame(socket, can_id, frame) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_binary(frame),
          can_dlc <- byte_size(frame),
          str_frame <- frame_binary_to_string(frame) do
@@ -99,10 +101,11 @@ defmodule Cand.Protocol do
   @doc """
   Deletes a the cyclic frame transmission job.
   """
-  @spec delete_cyclic_frame(GenServer.server(), integer()) :: :ok | {:error, atom()}
+  @spec delete_cyclic_frame(GenServer.server(), integer()) :: :ok | list() | {:error, atom()}
   def delete_cyclic_frame(socket, can_id) do
     with true <- is_pid(socket),
-         true <- is_a_integer_greater_or_equal_than?(can_id, 0) do
+         true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id) do
       Socket.send(socket, "< delete #{can_id} >")
     else
       _ ->
@@ -113,10 +116,11 @@ defmodule Cand.Protocol do
   @doc """
   Sends a single CAN frame.
   """
-  @spec send_frame(GenServer.server(), integer(), binary()) :: :ok | {:error, atom()}
+  @spec send_frame(GenServer.server(), integer(), binary()) :: :ok | list() | {:error, atom()}
   def send_frame(socket, can_id, frame) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_binary(frame),
          can_dlc <- byte_size(frame),
          str_frame <- frame_binary_to_string(frame) do
@@ -135,10 +139,11 @@ defmodule Cand.Protocol do
   The time value given is used to throttle the incoming update rate.
   """
   @spec filter_frames(GenServer.server(), integer(), binary(), integer(), integer()) ::
-          :ok | {:error, atom()}
+          :ok | list() | {:error, atom()}
   def filter_frames(socket, can_id, pattern, secs \\ 0, u_secs \\ 10) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_a_integer_greater_or_equal_than?(secs, 0),
          true <- is_a_integer_greater_or_equal_than?(u_secs, 0),
          true <- is_binary(pattern),
@@ -165,10 +170,11 @@ defmodule Cand.Protocol do
           binary(),
           integer(),
           integer()
-        ) :: :ok | {:error, atom()}
+        ) :: :ok | list() | {:error, atom()}
   def filter_multiplex_frames(socket, can_id, n_frame, pattern, secs \\ 0, u_secs \\ 10) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_a_integer_greater_or_equal_than?(n_frame, 0),
          true <- is_a_integer_greater_or_equal_than?(secs, 0),
          true <- is_a_integer_greater_or_equal_than?(u_secs, 0),
@@ -187,10 +193,11 @@ defmodule Cand.Protocol do
   Adds a subscription to a CAN ID. The frames are sent regardless of their content. 
   An interval in seconds or microseconds may be set.
   """
-  @spec subscribe(GenServer.server(), integer(), integer(), integer()) :: :ok | {:error, atom()}
+  @spec subscribe(GenServer.server(), integer(), integer(), integer()) :: :ok | list() | {:error, atom()}
   def subscribe(socket, can_id, secs \\ 0, u_secs \\ 10) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id),
          true <- is_a_integer_greater_or_equal_than?(secs, 0),
          true <- is_a_integer_greater_or_equal_than?(u_secs, 0) do
       Socket.send(socket, "< subscribe #{secs} #{u_secs} #{can_id} >")
@@ -203,10 +210,11 @@ defmodule Cand.Protocol do
   @doc """
   Deletes all subscriptions or filters for a specific CAN ID.
   """
-  @spec unsubscribe(GenServer.server(), integer()) :: :ok | {:error, atom()}
+  @spec unsubscribe(GenServer.server(), integer()) :: :ok | list() | {:error, atom()}
   def unsubscribe(socket, can_id) do
     with true <- is_pid(socket),
-         true <- is_a_integer_greater_or_equal_than?(can_id, 0) do
+         true <- is_a_integer_greater_or_equal_than?(can_id, 0),
+         can_id <- integer_to_string(can_id) do
       Socket.send(socket, "< unsubscribe #{can_id} >")
     else
       _ ->
@@ -219,7 +227,7 @@ defmodule Cand.Protocol do
   @doc """
   In CONTROL mode it is possible to receive bus statistics at a certain interval in milliseconds. 
   """
-  @spec statistics(GenServer.server(), integer()) :: :ok | {:error, atom()}
+  @spec statistics(GenServer.server(), integer()) :: :ok | list() | {:error, atom()}
   def statistics(socket, interval) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(interval, 0) do
@@ -245,7 +253,7 @@ defmodule Cand.Protocol do
     * `ext_address` - extended adressing feature (value for tx and rx if not specified separately / enable CAN_ISOTP_EXTEND_ADDR in flags)
     * `rx_ext_address` - extended adressing feature (separate value for rx / enable CAN_ISOTP_RX_EXT_ADDR in flags)
   """
-  @spec iso_tp_conf(GenServer.server(), list()) :: :ok | {:error, atom()}
+  @spec iso_tp_conf(GenServer.server(), list()) :: :ok | list() | {:error, atom()}
   def iso_tp_conf(socket, isotp_params) do
     with true <- is_pid(socket),
          tx_id <- Keyword.fetch!(isotp_params, :tx_id),
@@ -310,7 +318,7 @@ defmodule Cand.Protocol do
   @doc """
   Sends a protocol data unit (PDU), only for ISO-TP mode. 
   """
-  @spec send_pdu(GenServer.server(), binary()) :: :ok | {:error, atom()}
+  @spec send_pdu(GenServer.server(), binary()) :: :ok | list() | {:error, atom()}
   def send_pdu(socket, pdu) do
     with true <- is_pid(socket),
          true <- is_binary(pdu),
@@ -336,7 +344,7 @@ defmodule Cand.Protocol do
     * subscribe
     * unsubscribe
   """
-  @spec bcm_mode(GenServer.server()) :: :ok | {:error, atom()}
+  @spec bcm_mode(GenServer.server()) :: :ok | list() | {:error, atom()}
   def bcm_mode(socket) do
     Socket.send(socket, "< bcmmode >")
   end
@@ -346,7 +354,7 @@ defmodule Cand.Protocol do
   Only the send command works as in BCM mode. The following commands are understood:
     * send_frame
   """
-  @spec raw_mode(GenServer.server()) :: :ok | {:error, atom()}
+  @spec raw_mode(GenServer.server()) :: :ok | list() | {:error, atom()}
   def raw_mode(socket) do
     Socket.send(socket, "< rawmode >")
   end
@@ -356,7 +364,7 @@ defmodule Cand.Protocol do
   The following commands are understood:
     * statistics.
   """
-  @spec control_mode(GenServer.server()) :: :ok | {:error, atom()}
+  @spec control_mode(GenServer.server()) :: :ok | list() | {:error, atom()}
   def control_mode(socket) do
     Socket.send(socket, "< controlmode >")
   end
