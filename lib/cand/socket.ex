@@ -98,8 +98,13 @@ defmodule Cand.Socket do
         {:noreply, user_state}
       end
 
-      def handle_info({:frame, _can_id, _timestamp, _frame} = new_frame, state) do
+      def handle_info({:frame, { _can_id, _timestamp, _frame}} = new_frame, state) do
         state = apply(__MODULE__, :handle_frame, [new_frame, state])
+        {:noreply, state}
+      end
+
+      def handle_info(:disconnect, state) do
+        state = apply(__MODULE__, :handle_disconnect, [state])
         {:noreply, state}
       end
 
@@ -109,6 +114,17 @@ defmodule Cand.Socket do
 
         Logger.warn(
           "No handle_frame/3 clause in #{__MODULE__} provided for #{inspect(new_frame_data)}"
+        )
+
+        state
+      end
+
+      @impl true
+      def handle_disconnect(state) do
+        require Logger
+
+        Logger.warn(
+          "No handle_disconnect/1 clause in #{__MODULE__} provided for #{inspect(new_frame_data)}"
         )
 
         state
@@ -201,14 +217,15 @@ defmodule Cand.Socket do
                      configuration: 1,
                      cyclic_frames: 1,
                      subscriptions: 1,
-                     handle_frame: 2
+                     handle_frame: 2,
+                     handle_disconnect: 1
     end
   end
 
-  def init(state), do: {:ok, %{state | controlling_process: self()}}
+  def init(state), do: {:ok, state}
 
   def start_link do
-    GenServer.start_link(__MODULE__, %State{})
+    GenServer.start_link(__MODULE__, %State{controlling_process: self()})
   end
 
   def connect(pid, host, port, opts \\ [active: false]) do
@@ -254,6 +271,7 @@ defmodule Cand.Socket do
 
   # wait for response 
   def handle_call({:send, cmd, timeout}, _from, %{socket_opts: [active: false]} = state) do
+    Logger.debug("(#{__MODULE__}) Sending: #{cmd}. #{inspect(state)}")
     with  :ok <- :gen_tcp.send(state.socket, cmd),
           new_cmds <- add_new_cmd(cmd, state.last_cmds),
           {:ok, message} <- receive_reponse(cmd, state.socket, timeout),
@@ -266,6 +284,7 @@ defmodule Cand.Socket do
   end
 
   def handle_call({:send, cmd, _timeout}, _from, %{last_cmds: cmds} = state) do
+    Logger.debug("(#{__MODULE__}) Sending: #{cmd}. #{inspect(state)}")
     with  :ok <- :gen_tcp.send(state.socket, cmd),
           new_cmds <- add_new_cmd(cmd, cmds) do
       {:reply, :ok, %{state | last_cmds: new_cmds}}
@@ -276,6 +295,7 @@ defmodule Cand.Socket do
   end
 
   def handle_call({:receive, timeout}, _from, %{socket_opts: [active: false]} = state) do
+    Logger.debug("(#{__MODULE__}) Reading. #{inspect(state)}")
     with  {:ok, message} <- :gen_tcp.recv(state.socket, 0, timeout),
           response <- parse_messages(message) do
       {:reply, response, state}
@@ -299,14 +319,27 @@ defmodule Cand.Socket do
     end
   end
 
-  def handle_info({:tcp, _port, message}, state) do
-    IO.inspect(message, label: "CANBUS")
+  # Active Mode
+  def handle_info({:tcp, _port, '< hi >'}, state) do
+    Logger.info("(#{__MODULE__}) Connected. #{inspect(state)}")
+    {:noreply, %{state | reconnect: true}}
+  end
 
+  def handle_info({:tcp, _port, '< ok >'}, state) do
+    Logger.debug("(#{__MODULE__}) OK. #{inspect(state)}")
+    {:noreply, state}
+  end
+
+  def handle_info({:tcp, _port, '< echo >'}, state) do
+    Logger.debug("(#{__MODULE__}) Echo received. #{inspect(state)}")
+    {:noreply, state}
+  end
+
+  def handle_info({:tcp, _port, message}, %{controlling_process: p_pid} = state) do
     message
-    |> List.to_string()
     |> parse_messages
     |> Enum.map(fn message ->
-      IO.inspect(message)
+      dispatch(message, p_pid)
     end)
 
     {:noreply, state}
@@ -334,7 +367,6 @@ defmodule Cand.Socket do
   defp parse_messages(messages) do
     messages
     |> List.to_string()
-    |> IO.inspect()
     |> String.split("><")
     |> Enum.map(fn frame ->
       frame
@@ -354,7 +386,7 @@ defmodule Cand.Socket do
     |> parse_message()
   end
   defp parse_message("frame " <> payload) do
-    with [can_id_str, timestamp, can_frame] <- String.split(payload, " "),
+    with [can_id_str, timestamp, can_frame] <- String.split(payload, " ", parts: 3),
          can_frame_bin <- str_to_bin_frame(can_frame),
          can_id_int <- String.to_integer(can_id_str, 16) do
       {:frame, {can_id_int, timestamp, can_frame_bin}}
@@ -370,8 +402,13 @@ defmodule Cand.Socket do
   defp parse_message(message), do: {:error, message}
 
   defp str_to_bin_frame(can_frame) do
-    for <<byte::binary-2 <- can_frame>>, reduce: <<>> do
+    can_frame = String.replace(can_frame, " ", "")
+    for <<byte::binary-2 <- can_frame>>,reduce: <<>> do
       acc -> acc <> <<String.to_integer(byte, 16)>>
     end
   end
+
+  defp dispatch({:frame, _frame_data} = message, p_pid), do: Kernel.send(p_pid, message)
+  defp dispatch({:error, _error_msg} = message, p_pid), do: Kernel.send(p_pid, message)
+  defp dispatch(message, _p_pid), do: Logger.debug("(#{__MODULE__}) #{inspect(message)}")
 end
