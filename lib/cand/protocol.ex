@@ -83,7 +83,8 @@ defmodule Cand.Protocol do
   command with new content.
   NOTE: The transmission timers are not touched.
   """
-  @spec update_cyclic_frame(GenServer.server(), integer(), binary()) :: :ok | list() | {:error, atom()}
+  @spec update_cyclic_frame(GenServer.server(), integer(), binary()) ::
+          :ok | list() | {:error, atom()}
   def update_cyclic_frame(socket, can_id, frame) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),
@@ -125,6 +126,20 @@ defmodule Cand.Protocol do
          can_dlc <- byte_size(frame),
          str_frame <- frame_binary_to_string(frame) do
       Socket.send(socket, "< send #{can_id} #{can_dlc} #{str_frame}>")
+    else
+      _ ->
+        raise(ArgumentError, "There is an invalid Argument.")
+    end
+  end
+
+  @doc """
+  Receives CAN frames. NOTE: This is a helper function, it is not part of socketcand protocol.
+  """
+  @spec receive_frame(GenServer.server(), integer()) :: list() | {:error, atom()}
+  def receive_frame(socket, timeout \\ :infinity) do
+    with true <- is_pid(socket),
+         true <- is_integer(timeout) or timeout == :infinity do
+      Socket.receive(socket, timeout)
     else
       _ ->
         raise(ArgumentError, "There is an invalid Argument.")
@@ -193,7 +208,8 @@ defmodule Cand.Protocol do
   Adds a subscription to a CAN ID. The frames are sent regardless of their content. 
   An interval in seconds or microseconds may be set.
   """
-  @spec subscribe(GenServer.server(), integer(), integer(), integer()) :: :ok | list() | {:error, atom()}
+  @spec subscribe(GenServer.server(), integer(), integer(), integer()) ::
+          :ok | list() | {:error, atom()}
   def subscribe(socket, can_id, secs \\ 0, u_secs \\ 10) do
     with true <- is_pid(socket),
          true <- is_a_integer_greater_or_equal_than?(can_id, 0),

@@ -46,6 +46,7 @@ defmodule Cand.Mixfile do
   defp deps do
     [
       {:ex_doc, "~> 0.22", only: :dev, runtime: false},
+      {:muontrap, "~> 0.6.0", only: :test}
     ]
   end
 end

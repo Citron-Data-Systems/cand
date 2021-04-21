@@ -240,7 +240,7 @@ defmodule Cand.Socket do
 
   def handle_call({:connect, host, port, opts}, _from_, state) do
     with {:ok, socket} <- :gen_tcp.connect(host, port, opts) do
-      {:reply, :ok, %{state | socket: socket, host: host, port: port, socket_opts: opts, reconnect: true}}
+      {:reply, :ok, %{state | socket: socket, host: host, port: port, socket_opts: opts}}
     else
       error_reason ->
         {:reply, error_reason, state}
@@ -283,6 +283,11 @@ defmodule Cand.Socket do
       error_reason ->
         {:reply, error_reason, %{state | socket: nil}}
     end
+  end
+
+  def handle_call({:receive, _timeout}, _from, state) do
+    Logger.warn("(#{__MODULE__}) The socket is configured as passive. #{inspect(state)}")
+    {:reply, {:error, :einval}, state}
   end
 
   def handle_call(:disconnect, _from, %{socket: socket} = state) do
