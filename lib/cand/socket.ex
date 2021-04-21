@@ -60,6 +60,24 @@ defmodule Cand.Socket do
               reconnect: false
   end
 
+  @type config_options ::
+          {:host, tuple()}
+          | {:port, integer()}
+          | {:interface, binary()}
+          | {:mode, atom()}
+
+  @doc """
+  Optional callback that gets the Socket connection and CAN bus parameters.
+  """
+  @callback configuration(term()) :: config_options
+
+  @callback cyclic_frames(term()) :: list()
+  @callback subscriptions(term()) :: list()
+  @callback handle_frame({integer(), binary(), binary()}, term()) :: term()
+  @callback handle_disconnect(term()) :: term()
+  @callback handle_error(term(), term()) :: term()
+
+
   defmacro __using__(opts) do
     quote location: :keep, bind_quoted: [opts: opts] do
       use GenServer, Keyword.drop(opts, [:configuration])
@@ -98,7 +116,7 @@ defmodule Cand.Socket do
         {:noreply, user_state}
       end
 
-      def handle_info({:frame, { _can_id, _timestamp, _frame}} = new_frame, state) do
+      def handle_info({:frame, { _can_id, _timestamp, _frame} = new_frame}, state) do
         state = apply(__MODULE__, :handle_frame, [new_frame, state])
         {:noreply, state}
       end
@@ -108,10 +126,14 @@ defmodule Cand.Socket do
         {:noreply, state}
       end
 
+      def handle_info({:error, error_data}, state) do
+        state = apply(__MODULE__, :handle_error, [error_data, state])
+        {:noreply, state}
+      end
+
       @impl true
       def handle_frame(new_frame_data, state) do
         require Logger
-
         Logger.warn(
           "No handle_frame/3 clause in #{__MODULE__} provided for #{inspect(new_frame_data)}"
         )
@@ -122,11 +144,16 @@ defmodule Cand.Socket do
       @impl true
       def handle_disconnect(state) do
         require Logger
+        Logger.warn("No handle_disconnect/1 clause in #{__MODULE__} provided")
+        state
+      end
 
+      @impl true
+      def handle_error(error, state) do
+        require Logger
         Logger.warn(
-          "No handle_disconnect/1 clause in #{__MODULE__} provided for #{inspect(new_frame_data)}"
+          "No handle_error/2 clause in #{__MODULE__} provided for #{inspect(error)}"
         )
-
         state
       end
 
@@ -147,7 +174,7 @@ defmodule Cand.Socket do
              {:ok, ip_host} <- ip_to_tuple(host),
              port <- Keyword.get(configuration, :port, 29536),
              true <- is_integer(port) do
-          Socket.connect(pid, ip_host, port, [active: true])
+          Cand.Socket.connect(cs_pid, ip_host, port, [active: true])
         else
           _ ->
             require Logger
@@ -188,15 +215,12 @@ defmodule Cand.Socket do
 
       defp set_subscriptions(socket, subscriptions) do
         Enum.each(subscriptions, fn subscription_data ->
-          apply(Cand.Protocol, :subscriptions, [socket] ++ subscriptions_data)
+          apply(Cand.Protocol, :subscribe, [socket] ++ subscription_data)
         end)
       end
 
       defguardp is_ipv4_octet(v) when v >= 0 and v <= 255
 
-      @doc """
-      Convert & Validates an IP address to a string.
-      """
       defp ip_to_tuple({a, b, c, d} = ipa)
            when is_ipv4_octet(a) and is_ipv4_octet(b) and is_ipv4_octet(c) and is_ipv4_octet(d),
            do: {:ok, ipa}
@@ -218,6 +242,7 @@ defmodule Cand.Socket do
                      cyclic_frames: 1,
                      subscriptions: 1,
                      handle_frame: 2,
+                     handle_error: 2,
                      handle_disconnect: 1
     end
   end
