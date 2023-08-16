@@ -4,8 +4,8 @@ defmodule Cand.Socket do
 
     This module provides functions for configuration, read/write CAN frames.
     `Cand.Socket` is implemented as a `__using__` macro so that you can put it in any module,
-    you can initialize your Socket manually (see `test/socket_tests`) or by overwriting `configuration/1`, 
-    `cyclic_frames/1` and `subscriptions/1` to autoset the configuration, cyclic_frames and subscription items. 
+    you can initialize your Socket manually (see `test/socket_tests`) or by overwriting `configuration/1`,
+    `cyclic_frames/1` and `subscriptions/1` to autoset the configuration, cyclic_frames and subscription items.
     It also helps you to handle new CAN frames and subscription events by overwriting `handle_frame/2` callback.
 
     The following example shows a module that takes its configuration from the environment (see `test/terraform_test.exs`):
@@ -13,7 +13,7 @@ defmodule Cand.Socket do
     ```elixir
     defmodule MySocket do
       use Cand.Socket
-      
+
       # Use the `init` function to configure your Socket.
       def init({parent_pid, 103} = _user_init_state, socket_pid) do
         %{parent_pid: parent_pid, socket_pid: socket_pid}
@@ -43,7 +43,7 @@ defmodule Cand.Socket do
 
   defmodule State do
     @moduledoc """
-      * last_cmds: It is a record of the last configuration commands that will be 
+      * last_cmds: It is a record of the last configuration commands that will be
                    resent in case of an unscheduled reconnection.
       * port: Socketcand deamon port, default => 29536.
       * host: Network Interface IP, default => {127, 0, 0, 1}.
@@ -134,7 +134,7 @@ defmodule Cand.Socket do
       @impl true
       def handle_frame(new_frame_data, state) do
         require Logger
-        Logger.warn(
+        Logger.warning(
           "No handle_frame/3 clause in #{__MODULE__} provided for #{inspect(new_frame_data)}"
         )
 
@@ -144,14 +144,14 @@ defmodule Cand.Socket do
       @impl true
       def handle_disconnect(state) do
         require Logger
-        Logger.warn("No handle_disconnect/1 clause in #{__MODULE__} provided")
+        Logger.warning("No handle_disconnect/1 clause in #{__MODULE__} provided")
         state
       end
 
       @impl true
       def handle_error(error, state) do
         require Logger
-        Logger.warn(
+        Logger.warning(
           "No handle_error/2 clause in #{__MODULE__} provided for #{inspect(error)}"
         )
         state
@@ -179,7 +179,7 @@ defmodule Cand.Socket do
           _ ->
             require Logger
 
-            Logger.warn(
+            Logger.warning(
               "Invalid Socket Connection params: #{inspect(configuration)} provided by #{
                 __MODULE__
               }"
@@ -201,7 +201,7 @@ defmodule Cand.Socket do
           _ ->
             require Logger
 
-            Logger.warn(
+            Logger.warning(
               "Invalid Socket Bus params: #{inspect(configuration)} provided by #{__MODULE__}"
             )
         end
@@ -290,11 +290,11 @@ defmodule Cand.Socket do
   end
 
   def handle_call(_call, _from, %{socket: nil} = state) do
-    Logger.warn("(#{__MODULE__}) There is no available socket. #{inspect(state)}")
+    Logger.warning("(#{__MODULE__}) There is no available socket. #{inspect(state)}")
     {:reply, {:error, :einval}, %{state | socket: nil}}
   end
 
-  # wait for response 
+  # wait for response
   def handle_call({:send, cmd, timeout}, _from, %{socket_opts: [active: false]} = state) do
     Logger.debug("(#{__MODULE__}) Sending: #{cmd}. #{inspect(state)}")
     with  :ok <- :gen_tcp.send(state.socket, cmd),
@@ -331,7 +331,7 @@ defmodule Cand.Socket do
   end
 
   def handle_call({:receive, _timeout}, _from, state) do
-    Logger.warn("(#{__MODULE__}) The socket is configured as passive. #{inspect(state)}")
+    Logger.warning("(#{__MODULE__}) The socket is configured as passive. #{inspect(state)}")
     {:reply, {:error, :einval}, state}
   end
 
@@ -376,7 +376,7 @@ defmodule Cand.Socket do
   end
 
   def handle_info({:tcp_closed, _port}, state) do
-    Logger.warn("(#{__MODULE__}) Unexpected disconnection. Reconnect...")
+    Logger.warning("(#{__MODULE__}) Unexpected disconnection. Reconnect...")
     Kernel.send(state.controlling_process, :disconnect)
     {:noreply, state}
   end
