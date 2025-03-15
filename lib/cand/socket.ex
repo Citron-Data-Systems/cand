@@ -266,7 +266,7 @@ defmodule Cand.Socket do
   end
 
   def receive(pid, timeout \\ :infinity) do
-    GenServer.call(pid, {:receive, timeout})
+    GenServer.call(pid, {:receive, timeout}, timeout)
   end
 
   def handle_call({:connect, host, port, [active: false] = opts}, _from_, state) do
